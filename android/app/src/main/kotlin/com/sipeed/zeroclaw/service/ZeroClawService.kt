@@ -63,6 +63,23 @@ class ZeroClawService : Service() {
         @Volatile
         private var bundledSeedSyncAttempted = false
 
+        @Volatile
+        private var lastRuntimeLogReadError: String = ""
+
+        @Volatile
+        private var lastStopAttemptedPid: Int = -1
+
+        @Volatile
+        private var lastStopAttemptAt: String = ""
+
+        @Volatile
+        private var lastStopSucceeded: Boolean? = null
+
+        @Volatile
+        private var lastStopDiagnostics: String = ""
+
+        const val FIXED_HOME_PATH = "/data/local/tmp/zeroclaw"
+
         data class RuntimeProbeResult(
             val pid: Int,
             val source: String,
@@ -72,6 +89,19 @@ class ZeroClawService : Service() {
             val success: Boolean,
             val details: String,
         )
+
+        private fun runCommandForDiagnostics(command: List<String>): Pair<Int, String> {
+            return try {
+                val process = ProcessBuilder(command)
+                    .redirectErrorStream(true)
+                    .start()
+                val output = process.inputStream.bufferedReader().readText().trim()
+                val exitCode = process.waitFor()
+                Pair(exitCode, output)
+            } catch (e: Exception) {
+                Pair(-1, e.message ?: "Unknown error")
+            }
+        }
 
         fun start(context: Context, request: RuntimeLaunchRequest? = null) {
             val launchRequest = request ?: defaultLaunchRequest(context)
@@ -933,8 +963,13 @@ class ZeroClawService : Service() {
             }
         }
 
-        private fun killRuntimePid(pid: Int): Boolean {
-            if (pid <= 0) return false
+        private fun killRuntimePid(pid: Int): KillRuntimeResult {
+            if (pid <= 0) {
+                return KillRuntimeResult(
+                    success = false,
+                    details = "Invalid PID: $pid"
+                )
+            }
 
             val terminateCommands = listOf(
                 listOf("kill", "-TERM", pid.toString()),
@@ -980,7 +1015,10 @@ class ZeroClawService : Service() {
                 }
             }
 
-            return findRuntimePid() <= 0
+            return KillRuntimeResult(
+                success = false,
+                details = diagnostics.joinToString("\n") + "\nFailed to terminate runtime PID $pid"
+            )
         }
 
         private fun migrateLegacyHomeIfNeeded(context: Context) {
